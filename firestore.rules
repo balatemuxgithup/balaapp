@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function coupleDoc(coupleId) {
+      return get(/databases/$(database)/documents/couples/$(coupleId)).data;
+    }
+
+    function isCoupleMember(coupleId) {
+      return signedIn() && request.auth.uid in coupleDoc(coupleId).members;
+    }
+
+    function joiningSecondMember(coupleId) {
+      return signedIn()
+        && resource.data.members.size() == 1
+        && request.resource.data.members.size() == 2
+        && request.resource.data.members.hasAll([resource.data.members[0], request.auth.uid])
+        && request.resource.data.inviteCode == resource.data.inviteCode;
+    }
+
+    match /users/{uid} {
+      allow read, update, delete: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /inviteIndex/{code} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll(['coupleId', 'createdAt'])
+        && request.auth.uid in coupleDoc(request.resource.data.coupleId).members
+        && coupleDoc(request.resource.data.coupleId).members.size() == 1
+        && coupleDoc(request.resource.data.coupleId).inviteCode == code;
+      allow update, delete: if false;
+    }
+
+    match /couples/{coupleId} {
+      allow read: if signedIn() && (
+        request.auth.uid in resource.data.members
+        || resource.data.members.size() == 1
+      );
+      allow create: if signedIn()
+        && request.resource.data.members == [request.auth.uid]
+        && request.resource.data.members.size() == 1
+        && request.resource.data.inviteCode is string;
+      allow update: if signedIn() && (
+        joiningSecondMember(coupleId)
+        || (
+          request.auth.uid in resource.data.members
+          && request.resource.data.members.size() == resource.data.members.size()
+          && request.resource.data.members.hasAll(resource.data.members)
+        )
+      );
+      allow delete: if false;
+
+      match /audit/{auditId} {
+        allow read: if isCoupleMember(coupleId);
+        allow write: if false;
+      }
+
+      match /sessions/{sessionId} {
+        allow read, write: if isCoupleMember(coupleId);
+
+        match /ice/{iceId} {
+          allow read, write: if isCoupleMember(coupleId);
+        }
+      }
+
+      match /moods/{moodId} {
+        allow read, write: if isCoupleMember(coupleId);
+      }
+
+      match /messages/{messageId} {
+        allow read, write: if isCoupleMember(coupleId);
+      }
+
+      match /calendarEvents/{eventId} {
+        allow read, write: if isCoupleMember(coupleId);
+      }
+    }
+  }
+}
